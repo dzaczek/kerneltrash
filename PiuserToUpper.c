@@ -54,3 +54,8 @@ static void __exit keyboard_module_exit(void)
 {
     unregister_keyboard_notifier(&keyboard_nb);
 }
+/*
+make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
+insmod keyboard_module.ko
+rmmod keyboard_module
+*/
