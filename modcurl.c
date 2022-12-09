@@ -51,6 +51,7 @@ void timer_callback(unsigned long data)
   } else {
     // parse the response body to extract IP:port or URL:port
     // and log the information to the kernel log
+      printk(KERN_INFO "Response body: %.*s\n", response->body_len, response->body);
   }
 
 out:
